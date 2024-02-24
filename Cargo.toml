@@ -8,7 +8,7 @@ repository = "https://github.com/dounine/rust-pngdefry"
 license = "MIT"
 build = "build.rs"
 
-#exclude = ["ipa"]
+exclude = ["iphone.png", "niphone.png"]
 
 [workspace]
 members = ["example"]
