@@ -6,6 +6,7 @@ extern "C" {
 
 void restore_png(
         const char *filePath,
+        const char *outputPath,
         char *error
 );
 

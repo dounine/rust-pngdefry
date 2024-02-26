@@ -17,6 +17,7 @@ fn main() {
         .compile("pngdefry");
 
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=pngdefry/pngdefry.c");
 
     let bindings = bindgen::Builder::default()
         .header("wrapper.h")

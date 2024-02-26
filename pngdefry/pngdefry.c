@@ -36,10 +36,8 @@ int flag_Debug = 0;
 int flag_UpdateAlpha = 1;
 int repack_IDAT_size = 524288;    /* 512K -- seems a bit much to me, axually, but have seen this used */
 
-int flag_Rewrite = 0;
-
-char *suffix = NULL;
-char *outputPath = NULL;
+//char *suffix = NULL;
+//char *outputPath = NULL;
 
 unsigned char png_magic_bytes[] = "\x89\x50\x4E\x47\x0D\x0A\x1A\x0A";
 
@@ -52,10 +50,10 @@ struct chunk_t {
     unsigned int crc32;
 };
 
-int num_chunks = 0;
-int max_chunks = 0;
+//int num_chunks = 0;
+//int max_chunks = 0;
 
-struct chunk_t *pngChunks = NULL;
+//struct chunk_t *pngChunks = NULL;
 
 
 /** CRC32 generator for a block of data, thanks to Marc Autret
@@ -119,7 +117,7 @@ int read_long(void *src) {
 }
 
 
-int init_chunk(FILE *f, unsigned int filelength) {
+int init_chunk(FILE *f, unsigned int filelength, int *num_chunks, int *max_chunks, struct chunk_t **pngChunks) {
     struct chunk_t one_chunk;
     unsigned char buf[8];
 
@@ -159,32 +157,30 @@ int init_chunk(FILE *f, unsigned int filelength) {
     }
     one_chunk.crc32 = (buf[0] << 24) + (buf[1] << 16) + (buf[2] << 8) + buf[3];
 
-    if (num_chunks >= max_chunks) {
-        max_chunks += 8;
+    if (*num_chunks >= *max_chunks) {
+        *max_chunks = *max_chunks + 8;
         if (pngChunks == NULL)
-            pngChunks = (struct chunk_t *) malloc(max_chunks * sizeof(struct chunk_t));
+            *pngChunks = (struct chunk_t *) malloc(*max_chunks * sizeof(struct chunk_t));
         else
-            pngChunks = (struct chunk_t *) realloc(pngChunks, max_chunks * sizeof(struct chunk_t));
+            *pngChunks = (struct chunk_t *) realloc(*pngChunks, *max_chunks * sizeof(struct chunk_t));
     }
-    pngChunks[num_chunks].id = one_chunk.id;
-    pngChunks[num_chunks].length = one_chunk.length;
-    pngChunks[num_chunks].data = one_chunk.data;
-    pngChunks[num_chunks].crc32 = one_chunk.crc32;
-    num_chunks++;
+    (*pngChunks)[*num_chunks].id = one_chunk.id;
+    (*pngChunks)[*num_chunks].length = one_chunk.length;
+    (*pngChunks)[*num_chunks].data = one_chunk.data;
+    (*pngChunks)[*num_chunks].crc32 = one_chunk.crc32;
+    *num_chunks = *num_chunks + 1;
 
     return 0;
 }
 
-void reset_chunks(void) {
-    int i;
-
-    for (i = 0; i < num_chunks; i++) {
-        if (pngChunks[i].length && pngChunks[i].data) {
-            free(pngChunks[i].data);
-            pngChunks[i].data = NULL;
+void reset_chunks(int *num_chunks, struct chunk_t **pngChunks) {
+    for (int i = 0; i < *num_chunks; i++) {
+        if ((*pngChunks)[i].length && (*pngChunks)[i].data) {
+            free((*pngChunks)[i].data);
+            (*pngChunks)[i].data = NULL;
         }
     }
-    num_chunks = 0;
+    *num_chunks = 0;
 }
 
 void demultiplyAlpha(int wide, int high, unsigned char *data) {
@@ -370,7 +366,8 @@ void applyRowFilters(int wide, int high, unsigned char *data) {
 }
 
 
-int process(int flag_List_Chunks, const char *filename, char *error) {
+int process(int flag_List_Chunks, const char *filename, const char *outputPath, char *error) {
+    const char *write_file_name = outputPath;
     FILE *f;
     unsigned int length;
     int i;
@@ -405,7 +402,6 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
     int repack_size, repack_length;
 
 /* New file name comes here */
-    char *write_file_name = NULL;
     FILE *write_file;
     int write_block_size;
 
@@ -439,7 +435,9 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
         fclose(f);
         return 0;
     }
-    result = init_chunk(f, length);
+    int num_chunks = 0, max_chunks = 0;
+    struct chunk_t *pngChunks = NULL;
+    result = init_chunk(f, length, &num_chunks, &max_chunks, &pngChunks);
     if (result < 0) {
         fclose(f);
         switch (result) {
@@ -456,7 +454,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
                 snprintf(error, 1024, "%s : premature end of file", filename);
                 break;
         }
-        reset_chunks();
+        reset_chunks(&num_chunks, &pngChunks);
         return 0;
     }
 
@@ -468,14 +466,14 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
         snprintf(error, 1024, "%s : not an -iphone crushed PNG file", filename);
         if (!flag_Process_Anyway) {
             fclose(f);
-            reset_chunks();
+            reset_chunks(&num_chunks, &pngChunks);
             return 0;
         }
         didShowName = 1;
     }
 
     do {
-        result = init_chunk(f, length);
+        result = init_chunk(f, length, &num_chunks, &max_chunks, &pngChunks);
         if (result < 0) {
             fclose(f);
 
@@ -503,7 +501,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
                     snprintf(error, 1024, "error code %d", result);
                     break;
             }
-            reset_chunks();
+            reset_chunks(&num_chunks, &pngChunks);
             return 0;
         }
         if (num_chunks > 0 && pngChunks[num_chunks - 1].id == 0x49454E44)    /* "IEND" */
@@ -522,7 +520,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
         }
 //        printf("missing IEND chunk\n");
         snprintf(error, 1024, "missing IEND chunk");
-        reset_chunks();
+        reset_chunks(&num_chunks, &pngChunks);
         return 0;
     }
 
@@ -585,7 +583,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
 // 			printf ("%s : ", filename);
         }
         printf("no IHDR chunk found\n");
-        reset_chunks();
+        reset_chunks(&num_chunks, &pngChunks);
         return 0;
     }
     if (ihdr_chunk->length != 13) {
@@ -596,7 +594,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
 // 			printf ("%s : ", filename);
         }
         printf("IHDR chunk length incorrect\n");
-        reset_chunks();
+        reset_chunks(&num_chunks, &pngChunks);
         return 0;
     }
     imgwidth = read_long(&ihdr_chunk->data[4]);
@@ -615,7 +613,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
 // 			printf ("%s : ", filename);
         }
         printf("image dimensions invalid\n");
-        reset_chunks();
+        reset_chunks(&num_chunks, &pngChunks);
         return 0;
     }
     if (compression != 0) {
@@ -626,7 +624,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
 // 			printf ("%s : ", filename);
         }
         printf("unknown compression type %d\n", compression);
-        reset_chunks();
+        reset_chunks(&num_chunks, &pngChunks);
         return 0;
     }
     if (filter != 0) {
@@ -637,7 +635,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
 // 			printf ("%s : ", filename);
         }
         printf("unknown filter type %d\n", filter);
-        reset_chunks();
+        reset_chunks(&num_chunks, &pngChunks);
         return 0;
     }
     if (interlace != 0 && interlace != 1) {
@@ -648,7 +646,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
 // 			printf ("%s : ", filename);
         }
         printf("unknown interlace type %d\n", interlace);
-        reset_chunks();
+        reset_chunks(&num_chunks, &pngChunks);
         return 0;
     }
 
@@ -716,7 +714,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
 // 				printf ("%s : ", filename);
             }
             printf("unknown color type %d\n", colortype);
-            reset_chunks();
+            reset_chunks(&num_chunks, &pngChunks);
             return 0;
     }
     if (!i) {
@@ -727,7 +725,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
 // 			printf ("%s : ", filename);
         }
         printf("invalid bit depth %d for color type %d\n", bitdepth, colortype);
-        reset_chunks();
+        reset_chunks(&num_chunks, &pngChunks);
         return 0;
     }
 
@@ -789,7 +787,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
 // 			printf ("%s : ", filename);
         }
         printf("no IDAT chunks found\n");
-        reset_chunks();
+        reset_chunks(&num_chunks, &pngChunks);
         return 0;
     }
 /** Test for consecutive IDAT chunks */
@@ -814,7 +812,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
 // 			printf ("%s : ", filename);
         }
         printf("IDAT chunks are not consecutive\n");
-        reset_chunks();
+        reset_chunks(&num_chunks, &pngChunks);
         return 0;
     }
 
@@ -826,7 +824,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
 // 			printf ("%s : ", filename);
         }
         printf("all IDAT chunks are empty\n");
-        reset_chunks();
+        reset_chunks(&num_chunks, &pngChunks);
         return 0;
     }
 
@@ -854,7 +852,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
 // 				printf ("%s : ", filename);
             }
             printf("out of memory\n");
-            reset_chunks();
+            reset_chunks(&num_chunks, &pngChunks);
             return 0;
         }
         i = idat_first_index;
@@ -877,7 +875,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
 // 				printf ("%s : ", filename);
             }
             printf("out of memory\n");
-            reset_chunks();
+            reset_chunks(&num_chunks, &pngChunks);
             return 0;
         }
 
@@ -900,7 +898,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
 // 				printf ("%s : ", filename);
             }
             printf("unspecified decompression error\n");
-            reset_chunks();
+            reset_chunks(&num_chunks, &pngChunks);
             return 0;
         }
 
@@ -914,7 +912,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
             printf("decompression error, expected %u but got %u bytes\n", imgheight * bytespline + row_filter_bytes,
                    out_length);
             free(data_out);
-            reset_chunks();
+            reset_chunks(&num_chunks, &pngChunks);
             return 0;
         }
         if (flag_Verbose)
@@ -943,7 +941,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
 // 								printf ("%s : ", filename);
                             }
                             printf("unknown row filter type (%d)\n", data_out[y]);
-                            reset_chunks();
+                            reset_chunks(&num_chunks, &pngChunks);
                             return 0;
                         }
                         /* skip row filter byte */
@@ -998,7 +996,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
 // 							printf ("%s : ", filename);
                         }
                         printf("unknown row filter type (%d)\n", data_out[y]);
-                        reset_chunks();
+                        reset_chunks(&num_chunks, &pngChunks);
                         return 0;
                     }
                     /* skip row filter byte */
@@ -1042,7 +1040,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
 // 				printf ("%s : ", filename);
             }
             printf("out of memory\n");
-            reset_chunks();
+            reset_chunks(&num_chunks, &pngChunks);
             return 0;
         }
 
@@ -1060,7 +1058,7 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
 // 				printf ("%s : ", filename);
             }
             printf("unspecified compression error\n");
-            reset_chunks();
+            reset_chunks(&num_chunks, &pngChunks);
             return 0;
         }
 
@@ -1070,76 +1068,133 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
         free(data_out);
     }
 
-    if (flag_Rewrite) {
-        if (outputPath && outputPath[0]) {
-            char *clipOffPath;
-            clipOffPath = strrchr(filename, '/');
-            if (clipOffPath)
-                clipOffPath++;
-            else
-                clipOffPath = filename;
+//    if (outputPath && outputPath[0]) {
+//        char *clipOffPath;
+//        clipOffPath = strrchr(filename, '/');
+//        if (clipOffPath)
+//            clipOffPath++;
+//        else
+//            clipOffPath = filename;
+//
+//
+//        if (suffix && suffix[0])
+//            write_file_name = (char *) malloc(strlen(outputPath) + strlen(clipOffPath) + strlen(suffix) + 8);
+//        else
+//            write_file_name = (char *) malloc(strlen(outputPath) + strlen(clipOffPath) + 8);
+//        if (write_file_name == NULL) {
+//            if (didShowName)
+//                printf("    ");
+//            else {
+//                didShowName = 1;
+//// 					printf ("%s : ", filename);
+//            }
+//            printf("failed to allocate memory for output file name ...\n");
+//            reset_chunks(&num_chunks, &pngChunks);
+//            return 0;
+//        }
+//        strcpy (write_file_name, outputPath);
+//        strcat (write_file_name, "/");
+//        strcat (write_file_name, clipOffPath);
+//    } else {
+//        write_file_name = (char *) malloc(strlen(filename) + strlen(suffix) + 8);
+//        if (write_file_name == NULL) {
+//            if (didShowName)
+//                printf("    ");
+//            else {
+//                didShowName = 1;
+//// 					printf ("%s : ", filename);
+//            }
+//            printf("failed to allocate memory for output file name ...\n");
+//            reset_chunks(&num_chunks, &pngChunks);
+//            return 0;
+//        }
+//        strcpy (write_file_name, filename);
+//    }
+//    if (suffix && suffix[0]) {
+//        if (!strcasecmp(write_file_name + strlen(write_file_name) - 4, ".png"))
+//            strcpy (write_file_name + strlen(write_file_name) - 4, suffix);
+//        else
+//            strcat (write_file_name, suffix);
+//        strcat (write_file_name, ".png");
+//    }
+//
+//    if (!didShowName) {
+//// 			printf ("%s : ", filename);
+//    }
+//// 		printf ("writing to file %s\n", write_file_name);
 
-            if (suffix && suffix[0])
-                write_file_name = (char *) malloc(strlen(outputPath) + strlen(clipOffPath) + strlen(suffix) + 8);
-            else
-                write_file_name = (char *) malloc(strlen(outputPath) + strlen(clipOffPath) + 8);
-            if (write_file_name == NULL) {
-                if (didShowName)
-                    printf("    ");
-                else {
-                    didShowName = 1;
-// 					printf ("%s : ", filename);
-                }
-                printf("failed to allocate memory for output file name ...\n");
-                reset_chunks();
-                return 0;
+    write_file = fopen(write_file_name, "wb");
+    if (!write_file) {
+        printf("    failed to create output file!\n");
+        reset_chunks(&num_chunks, &pngChunks);
+        return 0;
+    }
+
+    fwrite(png_magic_bytes, 1, 8, write_file);
+
+    i = 0;
+    /* need to skip first bogus chunk */
+    /* at this point, I expect the first one to be IHDR! */
+    if (pngChunks[0].id == 0x43674249)    /* "CgBI" */
+        i++;
+    while (i < num_chunks && pngChunks[i].id != 0x49444154)    /* "IDAT" */
+    {
+        fputc((pngChunks[i].length >> 24) & 0xff, write_file);
+        fputc((pngChunks[i].length >> 16) & 0xff, write_file);
+        fputc((pngChunks[i].length >> 8) & 0xff, write_file);
+        fputc((pngChunks[i].length) & 0xff, write_file);
+        fwrite(pngChunks[i].data, pngChunks[i].length + 4, 1, write_file);
+        fputc((pngChunks[i].crc32 >> 24) & 0xff, write_file);
+        fputc((pngChunks[i].crc32 >> 16) & 0xff, write_file);
+        fputc((pngChunks[i].crc32 >> 8) & 0xff, write_file);
+        fputc((pngChunks[i].crc32) & 0xff, write_file);
+        i++;
+    }
+
+    /* Did we repack the data, or do we just need to rewrite the file? */
+    if (data_repack) {
+        write_block_size = 0;
+        while (write_block_size < repack_length) {
+            data_repack[4 + write_block_size - 4] = 'I';
+            data_repack[4 + write_block_size - 3] = 'D';
+            data_repack[4 + write_block_size - 2] = 'A';
+            data_repack[4 + write_block_size - 1] = 'T';
+            if (repack_length - write_block_size > repack_IDAT_size) {
+                fputc((repack_IDAT_size >> 24) & 0xff, write_file);
+                fputc((repack_IDAT_size >> 16) & 0xff, write_file);
+                fputc((repack_IDAT_size >> 8) & 0xff, write_file);
+                fputc((repack_IDAT_size) & 0xff, write_file);
+                fwrite(data_repack + write_block_size, repack_IDAT_size + 4, 1, write_file);
+                crc = crc32s(data_repack + write_block_size, repack_IDAT_size + 4);
+                fputc((crc >> 24) & 0xff, write_file);
+                fputc((crc >> 16) & 0xff, write_file);
+                fputc((crc >> 8) & 0xff, write_file);
+                fputc((crc) & 0xff, write_file);
+                write_block_size += repack_IDAT_size;
+            } else {
+                fputc(((repack_length - write_block_size) >> 24) & 0xff, write_file);
+                fputc(((repack_length - write_block_size) >> 16) & 0xff, write_file);
+                fputc(((repack_length - write_block_size) >> 8) & 0xff, write_file);
+                fputc(((repack_length - write_block_size)) & 0xff, write_file);
+                fwrite(data_repack + write_block_size, (repack_length - write_block_size) + 4, 1, write_file);
+                crc = crc32s(data_repack + write_block_size, (repack_length - write_block_size) + 4);
+                fputc((crc >> 24) & 0xff, write_file);
+                fputc((crc >> 16) & 0xff, write_file);
+                fputc((crc >> 8) & 0xff, write_file);
+                fputc((crc) & 0xff, write_file);
+                write_block_size = repack_length;
             }
-            strcpy (write_file_name, outputPath);
-            strcat (write_file_name, "/");
-            strcat (write_file_name, clipOffPath);
-        } else {
-            write_file_name = (char *) malloc(strlen(filename) + strlen(suffix) + 8);
-            if (write_file_name == NULL) {
-                if (didShowName)
-                    printf("    ");
-                else {
-                    didShowName = 1;
-// 					printf ("%s : ", filename);
-                }
-                printf("failed to allocate memory for output file name ...\n");
-                reset_chunks();
-                return 0;
-            }
-            strcpy (write_file_name, filename);
-        }
-        if (suffix && suffix[0]) {
-            if (!strcasecmp(write_file_name + strlen(write_file_name) - 4, ".png"))
-                strcpy (write_file_name + strlen(write_file_name) - 4, suffix);
-            else
-                strcat (write_file_name, suffix);
-            strcat (write_file_name, ".png");
         }
 
-        if (!didShowName) {
-// 			printf ("%s : ", filename);
-        }
-// 		printf ("writing to file %s\n", write_file_name);
-
-        write_file = fopen(write_file_name, "wb");
-        if (!write_file) {
-            printf("    failed to create output file!\n");
-            reset_chunks();
-            return 0;
-        }
-
-        fwrite(png_magic_bytes, 1, 8, write_file);
-
-        i = 0;
-        /* need to skip first bogus chunk */
-        /* at this point, I expect the first one to be IHDR! */
-        if (pngChunks[0].id == 0x43674249)    /* "CgBI" */
+        /* skip original IDAT chunks */
+        while (i < num_chunks && pngChunks[i].id == 0x49444154)    /* "IDAT" */
             i++;
-        while (i < num_chunks && pngChunks[i].id != 0x49444154)    /* "IDAT" */
+
+        free(data_repack);
+    } else {
+        /* image was not repacked */
+        /* output original IDAT chunks */
+        while (i < num_chunks && pngChunks[i].id == 0x49444154)    /* "IDAT" */
         {
             fputc((pngChunks[i].length >> 24) & 0xff, write_file);
             fputc((pngChunks[i].length >> 16) & 0xff, write_file);
@@ -1152,115 +1207,40 @@ int process(int flag_List_Chunks, const char *filename, char *error) {
             fputc((pngChunks[i].crc32) & 0xff, write_file);
             i++;
         }
-
-        /* Did we repack the data, or do we just need to rewrite the file? */
-        if (data_repack) {
-            write_block_size = 0;
-            while (write_block_size < repack_length) {
-                data_repack[4 + write_block_size - 4] = 'I';
-                data_repack[4 + write_block_size - 3] = 'D';
-                data_repack[4 + write_block_size - 2] = 'A';
-                data_repack[4 + write_block_size - 1] = 'T';
-                if (repack_length - write_block_size > repack_IDAT_size) {
-                    fputc((repack_IDAT_size >> 24) & 0xff, write_file);
-                    fputc((repack_IDAT_size >> 16) & 0xff, write_file);
-                    fputc((repack_IDAT_size >> 8) & 0xff, write_file);
-                    fputc((repack_IDAT_size) & 0xff, write_file);
-                    fwrite(data_repack + write_block_size, repack_IDAT_size + 4, 1, write_file);
-                    crc = crc32s(data_repack + write_block_size, repack_IDAT_size + 4);
-                    fputc((crc >> 24) & 0xff, write_file);
-                    fputc((crc >> 16) & 0xff, write_file);
-                    fputc((crc >> 8) & 0xff, write_file);
-                    fputc((crc) & 0xff, write_file);
-                    write_block_size += repack_IDAT_size;
-                } else {
-                    fputc(((repack_length - write_block_size) >> 24) & 0xff, write_file);
-                    fputc(((repack_length - write_block_size) >> 16) & 0xff, write_file);
-                    fputc(((repack_length - write_block_size) >> 8) & 0xff, write_file);
-                    fputc(((repack_length - write_block_size)) & 0xff, write_file);
-                    fwrite(data_repack + write_block_size, (repack_length - write_block_size) + 4, 1, write_file);
-                    crc = crc32s(data_repack + write_block_size, (repack_length - write_block_size) + 4);
-                    fputc((crc >> 24) & 0xff, write_file);
-                    fputc((crc >> 16) & 0xff, write_file);
-                    fputc((crc >> 8) & 0xff, write_file);
-                    fputc((crc) & 0xff, write_file);
-                    write_block_size = repack_length;
-                }
-            }
-
-            /* skip original IDAT chunks */
-            while (i < num_chunks && pngChunks[i].id == 0x49444154)    /* "IDAT" */
-                i++;
-
-            free(data_repack);
-        } else {
-            /* image was not repacked */
-            /* output original IDAT chunks */
-            while (i < num_chunks && pngChunks[i].id == 0x49444154)    /* "IDAT" */
-            {
-                fputc((pngChunks[i].length >> 24) & 0xff, write_file);
-                fputc((pngChunks[i].length >> 16) & 0xff, write_file);
-                fputc((pngChunks[i].length >> 8) & 0xff, write_file);
-                fputc((pngChunks[i].length) & 0xff, write_file);
-                fwrite(pngChunks[i].data, pngChunks[i].length + 4, 1, write_file);
-                fputc((pngChunks[i].crc32 >> 24) & 0xff, write_file);
-                fputc((pngChunks[i].crc32 >> 16) & 0xff, write_file);
-                fputc((pngChunks[i].crc32 >> 8) & 0xff, write_file);
-                fputc((pngChunks[i].crc32) & 0xff, write_file);
-                i++;
-            }
-        }
-
-        /* output remaining chunks */
-        while (i < num_chunks) {
-            fputc((pngChunks[i].length >> 24) & 0xff, write_file);
-            fputc((pngChunks[i].length >> 16) & 0xff, write_file);
-            fputc((pngChunks[i].length >> 8) & 0xff, write_file);
-            fputc((pngChunks[i].length) & 0xff, write_file);
-            fwrite(pngChunks[i].data, pngChunks[i].length + 4, 1, write_file);
-            fputc((pngChunks[i].crc32 >> 24) & 0xff, write_file);
-            fputc((pngChunks[i].crc32 >> 16) & 0xff, write_file);
-            fputc((pngChunks[i].crc32 >> 8) & 0xff, write_file);
-            fputc((pngChunks[i].crc32) & 0xff, write_file);
-            i++;
-        }
-        fclose(write_file);
-        free(write_file_name);
-        reset_chunks();
-
-        return 1;
     }
 
-/* We come here if nothing was written */
-/* Just show the name and go away */
-    if (!didShowName) {
-        printf("%s\n", filename);
+    /* output remaining chunks */
+    while (i < num_chunks) {
+        fputc((pngChunks[i].length >> 24) & 0xff, write_file);
+        fputc((pngChunks[i].length >> 16) & 0xff, write_file);
+        fputc((pngChunks[i].length >> 8) & 0xff, write_file);
+        fputc((pngChunks[i].length) & 0xff, write_file);
+        fwrite(pngChunks[i].data, pngChunks[i].length + 4, 1, write_file);
+        fputc((pngChunks[i].crc32 >> 24) & 0xff, write_file);
+        fputc((pngChunks[i].crc32 >> 16) & 0xff, write_file);
+        fputc((pngChunks[i].crc32 >> 8) & 0xff, write_file);
+        fputc((pngChunks[i].crc32) & 0xff, write_file);
+        i++;
     }
-
-    if (data_repack)
-        free(data_repack);
-
-    reset_chunks();
-    return 0;
+    fclose(write_file);
+    reset_chunks(&num_chunks, &pngChunks);
+    return 1;
 }
 
 void restore_png(
         const char *filePath,
+        const char *outputPath,
         char *error
 ) {
-    int i;
-    int seenFiles = 0, processedFiles = 0;
-    suffix = "_pngdefry";
-    flag_Rewrite = 1;
-    reset_chunks();
-    process(0, filePath, error);
+    process(0, filePath, outputPath, error);
 }
 
 int is_iphone_png(const char *filePath, char *error) {
-    reset_chunks();
+    struct chunk_t *pngChunks = NULL;
+    int num_chunks = 0, max_chunks = 0;
+    reset_chunks(&num_chunks, &pngChunks);
     FILE *f;
     unsigned int length;
-    int i;
     unsigned char buf[16];
     int crc, result;
     f = fopen(filePath, "rb");
@@ -1272,15 +1252,12 @@ int is_iphone_png(const char *filePath, char *error) {
     length = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    i = 0;
-
     fread(buf, 1, 8, f);
-    i += 8;
     if (memcmp(buf, png_magic_bytes, 8) != 0) {
         fclose(f);
         return 0;
     }
-    result = init_chunk(f, length);
+    result = init_chunk(f, length, &num_chunks, &max_chunks, &pngChunks);
     if (result < 0) {
         fclose(f);
         switch (result) {
@@ -1291,14 +1268,14 @@ int is_iphone_png(const char *filePath, char *error) {
             case -3:
                 return 0;
         }
-        reset_chunks();
+        reset_chunks(&num_chunks, &pngChunks);
         return 0;
     }
 
     if (pngChunks[0].id != 0x43674249) {
         if (!flag_Process_Anyway) {
             fclose(f);
-            reset_chunks();
+            reset_chunks(&num_chunks, &pngChunks);
             return 0;
         }
         fclose(f);
@@ -1310,9 +1287,9 @@ int is_iphone_png(const char *filePath, char *error) {
 
 
 int main(int argc, char **argv) {
-    int a = is_iphone_png("./icon.png", NULL);
-    printf("%i", a);
-    restore_png("./icon.png", NULL);
+//    int a = is_iphone_png("./icon.png", NULL);
+//    printf("%i", a);
+    restore_png("./icon.png", "/Users/lake/dounine/github/rust/rust-pngdefry/iphone_pngdefry.png", NULL);
     return 0;
 
     int i, nomoreoptions;
@@ -1340,6 +1317,8 @@ int main(int argc, char **argv) {
     }
 
     nomoreoptions = 0;
+    char *suffix = "_pngdefry";
+    char *outputPath = NULL;
     int flag_List_Chunks = 0;
     for (i = 1; i < argc; i++) {
         if (argv[i][0] != '-')
@@ -1388,7 +1367,7 @@ int main(int argc, char **argv) {
                     }
                 }
                 argv[i][2] = 0;
-                flag_Rewrite = 1;
+//                flag_Rewrite = 1;
                 break;
             case 'o':
                 if (argv[i][2]) {
@@ -1413,7 +1392,7 @@ int main(int argc, char **argv) {
                     }
                 }
                 argv[i][2] = 0;
-                flag_Rewrite = 1;
+//                flag_Rewrite = 1;
                 break;
             case 'i':
                 if (argv[i][2]) {
@@ -1468,7 +1447,7 @@ int main(int argc, char **argv) {
 
     for (; i < argc; i++) {
         seenFiles++;
-        if (process(flag_List_Chunks, argv[i], NULL))
+        if (process(flag_List_Chunks, argv[i], "_pngdefry", NULL))
             processedFiles++;
     }
 // 	if (flag_Rewrite)
