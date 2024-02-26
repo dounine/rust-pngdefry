@@ -1289,7 +1289,7 @@ int is_iphone_png(const char *filePath, char *error) {
 int main(int argc, char **argv) {
 //    int a = is_iphone_png("./icon.png", NULL);
 //    printf("%i", a);
-    restore_png("./icon.png", "/Users/lake/dounine/github/rust/rust-pngdefry/iphone_pngdefry.png", NULL);
+    restore_png("./icon.png", "./iphone_pngdefry.png", NULL);
     return 0;
 
     int i, nomoreoptions;
